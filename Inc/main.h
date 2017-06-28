@@ -83,6 +83,9 @@
 
 /* USER CODE BEGIN Private defines */
 
+#define NUM_METER_DEVICE 6
+#define DEBOUNCER_TIMEOUT 100 /* milliseconds */
+
 /* USER CODE END Private defines */
 
 void _Error_Handler(char *, int);

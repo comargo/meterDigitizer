@@ -59,6 +59,29 @@ RTC_HandleTypeDef hrtc;
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
+struct MeterDeviceState
+{
+    uint32_t debounceTimeout;
+    uint32_t intCounter;
+    uint16_t fracCounter;
+};
+
+struct MeterDevicePin
+{
+    GPIO_TypeDef *port;
+    uint16_t pin;
+    char *name;
+};
+
+volatile struct MeterDeviceState meterDevicesState[NUM_METER_DEVICE] = {};
+const struct MeterDevicePin meterDevicesPin[NUM_METER_DEVICE] = {
+{.port = HOT_WATER_1_GPIO_Port, .pin = HOT_WATER_1_Pin, .name=u8"ГВС 27"},
+{.port = COLD_WATER_1_GPIO_Port, .pin = COLD_WATER_1_Pin, .name=u8"ХВС 27"},
+{.port = HEAT_1_GPIO_Port, .pin = HEAT_1_Pin, .name=u8"Тепло 27"},
+{.port = HOT_WATER_2_GPIO_Port, .pin = HOT_WATER_2_Pin, .name=u8"ГВС 28"},
+{.port = COLD_WATER_2_GPIO_Port, .pin = COLD_WATER_2_Pin, .name=u8"ХВС 28"},
+{.port = HEAT_2_GPIO_Port, .pin = HEAT_2_Pin, .name=u8"Тепло 28"}
+};
 
 /* USER CODE END PV */
 
@@ -69,6 +92,7 @@ static void MX_RTC_Init(void);
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
+int SelectNearestDevice();
 
 /* USER CODE END PFP */
 
@@ -115,7 +139,19 @@ int main(void)
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
-
+      int dev;
+      while((dev = SelectNearestDevice()) > 0 ) {
+          while(HAL_GetTick() < meterDevicesState[dev].debounceTimeout) __NOP();
+          meterDevicesState[dev].debounceTimeout = 0;
+          if(HAL_GPIO_ReadPin(meterDevicesPin[dev].port, meterDevicesPin[dev].pin) == GPIO_PIN_RESET) {
+              meterDevicesState[dev].fracCounter++;
+              if(meterDevicesState[dev].fracCounter > 1000) {
+                  meterDevicesState[dev].fracCounter = 0;
+                  meterDevicesState[dev].intCounter++;
+              }
+          }
+      }
+      HAL_PWR_EnterSLEEPMode(0, PWR_SLEEPENTRY_WFI);
   }
   /* USER CODE END 3 */
 
@@ -256,7 +292,7 @@ static void MX_GPIO_Init(void)
                            HEAT_1_Pin HEAT_2_Pin */
   GPIO_InitStruct.Pin = HOT_WATER_1_Pin|COLD_WATER_1_Pin|HOT_WATER_2_Pin|COLD_WATER_2_Pin 
                           |HEAT_1_Pin|HEAT_2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
@@ -300,6 +336,46 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+int SelectNearestDevice()
+{
+    int selectedDevice = -1;
+    for(int i=0; i<NUM_METER_DEVICE; ++i) {
+        if(meterDevicesState[i].debounceTimeout == 0)
+            continue; // Skip not-interrupted device
+
+        if(selectedDevice < 0) {
+            selectedDevice = i;
+            continue;
+        }
+
+
+        if(meterDevicesState[i].debounceTimeout > UINT32_MAX/2 && meterDevicesState[selectedDevice].debounceTimeout < UINT32_MAX/2 ) {
+            // The counter is likely to overflow, use current as minimum value
+            selectedDevice = i;
+            continue;
+        }
+
+        if(meterDevicesState[i].debounceTimeout < meterDevicesState[selectedDevice].debounceTimeout) {
+            // The current device trigger earlier then selected device
+            selectedDevice = i;
+            continue;
+        }
+    }
+    return selectedDevice;
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    for(int i=0; i<NUM_METER_DEVICE; ++i) {
+        if(meterDevicesPin[i].pin == GPIO_Pin) {
+            if(meterDevicesState[i].debounceTimeout == 0) {
+                meterDevicesState[i].debounceTimeout = HAL_GetTick()+DEBOUNCER_TIMEOUT;
+            }
+            return;
+        }
+    }
+}
 
 /* USER CODE END 4 */
 
