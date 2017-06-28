@@ -140,7 +140,7 @@ int main(void)
 
   /* USER CODE BEGIN 3 */
       int dev;
-      while((dev = SelectNearestDevice()) > 0 ) {
+      while((dev = SelectNearestDevice()) >= 0 ) {
           while(HAL_GetTick() < meterDevicesState[dev].debounceTimeout) __NOP();
           meterDevicesState[dev].debounceTimeout = 0;
           if(HAL_GPIO_ReadPin(meterDevicesPin[dev].port, meterDevicesPin[dev].pin) == GPIO_PIN_RESET) {
