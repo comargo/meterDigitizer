@@ -149,6 +149,7 @@ int main(void)
                   meterDevicesState[dev].fracCounter = 0;
                   meterDevicesState[dev].intCounter++;
               }
+              HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
           }
       }
       HAL_PWR_EnterSLEEPMode(0, PWR_SLEEPENTRY_WFI);
