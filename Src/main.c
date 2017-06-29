@@ -92,6 +92,7 @@ static void MX_RTC_Init(void);
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
+static void ProcessMeterDevices();
 static int SelectNearestDevice();
 
 /* USER CODE END PFP */
@@ -136,22 +137,10 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+      ProcessMeterDevices();
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
-      int dev;
-      while((dev = SelectNearestDevice()) >= 0 ) {
-          while(HAL_GetTick() < meterDevicesState[dev].debounceTimeout) __NOP();
-          meterDevicesState[dev].debounceTimeout = 0;
-          if(HAL_GPIO_ReadPin(meterDevicesPin[dev].port, meterDevicesPin[dev].pin) == GPIO_PIN_RESET) {
-              meterDevicesState[dev].fracCounter++;
-              if(meterDevicesState[dev].fracCounter > 1000) {
-                  meterDevicesState[dev].fracCounter = 0;
-                  meterDevicesState[dev].intCounter++;
-              }
-              HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
-          }
-      }
       HAL_SuspendTick();
       HAL_PWR_EnterSLEEPMode(0, PWR_SLEEPENTRY_WFI);
       HAL_ResumeTick();
@@ -339,6 +328,24 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void ProcessMeterDevices()
+{
+    int dev;
+    while((dev = SelectNearestDevice()) >= 0 ) {
+        while(HAL_GetTick() < meterDevicesState[dev].debounceTimeout) __NOP();
+        meterDevicesState[dev].debounceTimeout = 0;
+        if(HAL_GPIO_ReadPin(meterDevicesPin[dev].port, meterDevicesPin[dev].pin) == GPIO_PIN_RESET) {
+            meterDevicesState[dev].fracCounter++;
+            if(meterDevicesState[dev].fracCounter > 1000) {
+                meterDevicesState[dev].fracCounter = 0;
+                meterDevicesState[dev].intCounter++;
+            }
+            SendCounter(dev);
+            HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
+        }
+    }
+}
 
 int SelectNearestDevice()
 {
