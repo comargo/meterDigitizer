@@ -92,7 +92,7 @@ static void MX_RTC_Init(void);
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
-int SelectNearestDevice();
+static int SelectNearestDevice();
 
 /* USER CODE END PFP */
 
