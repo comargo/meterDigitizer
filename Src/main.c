@@ -152,7 +152,9 @@ int main(void)
               HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
           }
       }
+      HAL_SuspendTick();
       HAL_PWR_EnterSLEEPMode(0, PWR_SLEEPENTRY_WFI);
+      HAL_ResumeTick();
   }
   /* USER CODE END 3 */
 
