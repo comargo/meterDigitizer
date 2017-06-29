@@ -79,6 +79,18 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
   {
   /* USER CODE BEGIN USB_MspInit 0 */
 
+      // Send USB SE0 signal
+      __HAL_RCC_GPIOA_CLK_ENABLE();
+      /*Configure GPIO pin Output Level */
+      HAL_GPIO_WritePin(USB_DM_GPIO_Port, USB_DM_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(USB_DP_GPIO_Port, USB_DP_Pin, GPIO_PIN_RESET);
+      GPIO_InitTypeDef GPIO_InitStruct;
+      GPIO_InitStruct.Pin = USB_DM_Pin|USB_DP_Pin;
+      GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+      GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+      HAL_GPIO_Init(USB_DP_GPIO_Port, &GPIO_InitStruct);
+      HAL_Delay(1);
+
   /* USER CODE END USB_MspInit 0 */
     /* Peripheral clock enable */
     __HAL_RCC_USB_CLK_ENABLE();
