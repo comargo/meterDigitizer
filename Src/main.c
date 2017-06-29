@@ -396,12 +396,36 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   */
 void _Error_Handler(char * file, int line)
 {
+#define FAULT_DELAY(x) for(int i=0; i<x*500000; ++i) __NOP()
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
-  while(1) 
-  {
-  }
-  /* USER CODE END Error_Handler_Debug */ 
+    HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_SET);
+    while(1)
+    {
+
+        FAULT_DELAY(6);
+        for(int i=0; i<3; ++i) {
+            HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);
+            FAULT_DELAY(1);
+            HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_SET);
+            FAULT_DELAY(1);
+        }
+        FAULT_DELAY(2);
+        for(int i=0; i<3; ++i) {
+            HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);
+            FAULT_DELAY(3);
+            HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_SET);
+            FAULT_DELAY(1);
+        }
+        FAULT_DELAY(2);
+        for(int i=0; i<3; ++i) {
+            HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);
+            FAULT_DELAY(1);
+            HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_SET);
+            FAULT_DELAY(1);
+        }
+    }
+    /* USER CODE END Error_Handler_Debug */
 }
 
 #ifdef USE_FULL_ASSERT
