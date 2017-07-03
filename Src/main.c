@@ -64,8 +64,7 @@ RTC_HandleTypeDef hrtc;
 struct MeterDeviceState
 {
     uint32_t debounceTimeout;
-    uint32_t intCounter;
-    uint16_t fracCounter;
+    uint32_t counter; // counter in liters (0.001 m^3)
 };
 
 struct MeterDevicePin
@@ -311,10 +310,9 @@ void ProcessMeterDevices()
         while(HAL_GetTick() < meterDevicesState[dev].debounceTimeout) __NOP();
         meterDevicesState[dev].debounceTimeout = 0;
         if(HAL_GPIO_ReadPin(meterDevicesPin[dev].port, meterDevicesPin[dev].pin) == GPIO_PIN_RESET) {
-            meterDevicesState[dev].fracCounter++;
-            if(meterDevicesState[dev].fracCounter > 1000) {
-                meterDevicesState[dev].fracCounter = 0;
-                meterDevicesState[dev].intCounter++;
+            meterDevicesState[dev].counter++;
+            if(meterDevicesState[dev].counter > 100000000) { // Counter overflow
+                meterDevicesState[dev].counter = 0;
             }
             SendCounter(dev);
             HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
@@ -357,8 +355,8 @@ void SendCounter(int dev)
     RTC_TimeTypeDef time;
     HAL_RTC_GetDate(&hrtc, &date, RTC_FORMAT_BIN);
     HAL_RTC_GetTime(&hrtc, &time, RTC_FORMAT_BIN);
-    uint32_t intCnt = meterDevicesState[dev].intCounter;
-    uint16_t fracCnt =  meterDevicesState[dev].fracCounter;
+    uint32_t intCnt = meterDevicesState[dev].counter/1000;
+    uint16_t fracCnt =  meterDevicesState[dev].counter%1000;
     sprintf(counterMsg,"20%02u-%02u-%02uT%02u:%02u:%02u\t%d\t%s\t%05u.%03u\r\n",
             (uint)date.Year, (uint)date.Month, (uint)date.Date,
             (uint)time.Hours, (uint)time.Minutes, (uint)time.Seconds,
