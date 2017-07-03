@@ -7,5 +7,5 @@ add_executable(${PROJECT_NAME} Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_co
 target_compile_definitions(${PROJECT_NAME} PUBLIC USE_HAL_DRIVER STM32F103xB)
 target_include_directories(${PROJECT_NAME} PUBLIC Inc Drivers/STM32F1xx_HAL_Driver/Inc Drivers/STM32F1xx_HAL_Driver/Inc/Legacy Middlewares/ST/STM32_USB_Device_Library/Core/Inc Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc Drivers/CMSIS/Device/ST/STM32F1xx/Include Drivers/CMSIS/Include)
 target_compile_options(${PROJECT_NAME} PUBLIC -mcpu=cortex-m3 -mthumb   -Wall -fdata-sections -ffunction-sections -std=c11)
-target_link_libraries(${PROJECT_NAME} -L${CMAKE_CURRENT_SOURCE_DIR} -mcpu=cortex-m3 -mthumb   -specs=nano.specs -TSTM32F103C8Tx_FLASH.ld  -lc -lm -lnosys -Wl,-Map=./meterDigitizer.map,--cref -Wl,--gc-sections)
+target_link_libraries(${PROJECT_NAME} -L${CMAKE_CURRENT_SOURCE_DIR} -mcpu=cortex-m3 -mthumb   -specs=nano.specs -TSTM32F103C8Tx_FLASH.ld  -lc -lm -lnosys -Wl,-Map=./meterDigitizer.map,--cref -Wl,--gc-sections -Wl,--no-wchar-size-warning)
 
