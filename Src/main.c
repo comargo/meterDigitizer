@@ -51,6 +51,8 @@
 #include "usb_device.h"
 
 /* USER CODE BEGIN Includes */
+#include <inttypes.h>
+#include "usbd_cdc_if.h"
 
 /* USER CODE END Includes */
 
@@ -94,6 +96,7 @@ static void MX_RTC_Init(void);
 /* Private function prototypes -----------------------------------------------*/
 static void ProcessMeterDevices();
 static int SelectNearestDevice();
+static void SendCounter(int dev);
 
 /* USER CODE END PFP */
 
@@ -373,6 +376,23 @@ int SelectNearestDevice()
         }
     }
     return selectedDevice;
+}
+
+void SendCounter(int dev)
+{
+    char counterMsg[256];
+    RTC_DateTypeDef date;
+    RTC_TimeTypeDef time;
+    HAL_RTC_GetDate(&hrtc, &date, RTC_FORMAT_BIN);
+    HAL_RTC_GetTime(&hrtc, &time, RTC_FORMAT_BIN);
+    uint32_t intCnt = meterDevicesState[dev].intCounter;
+    uint16_t fracCnt =  meterDevicesState[dev].fracCounter;
+    sprintf(counterMsg,"20%02u-%02u-%02uT%02u:%02u:%02u\t%d\t%s\t%05u.%03u\r\n",
+            (uint)date.Year, (uint)date.Month, (uint)date.Date,
+            (uint)time.Hours, (uint)time.Minutes, (uint)time.Seconds,
+            dev, meterDevicesPin[dev].name,
+            (uint)intCnt, (uint)fracCnt);
+    CDC_Transmit_FS((uint8_t*)counterMsg, strlen(counterMsg));
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
