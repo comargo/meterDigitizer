@@ -51,9 +51,6 @@
 #include "usb_device.h"
 
 /* USER CODE BEGIN Includes */
-#include <inttypes.h>
-#include <stdio.h>
-#include <ctype.h>
 #include "usbd_cdc_if.h"
 
 /* USER CODE END Includes */
