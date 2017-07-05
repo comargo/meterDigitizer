@@ -1,3 +1,3 @@
 target_sources(meterDigitizer
-	PRIVATE Src/hal_rtc_unix.c
+        PRIVATE Src/hal_rtc_unix.c Src/meter_device.c Src/uart_commands.c
 )

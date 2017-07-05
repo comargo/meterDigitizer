@@ -48,97 +48,29 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f1xx_hal.h"
+#include "rtc.h"
 #include "usb_device.h"
+#include "gpio.h"
 
 /* USER CODE BEGIN Includes */
-#include "usbd_cdc_if.h"
 #include "hal_rtc_unix.h"
+#include "meter_device.h"
+#include "uart_commands.h"
 
 /* USER CODE END Includes */
 
 /* Private variables ---------------------------------------------------------*/
-RTC_HandleTypeDef hrtc;
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
-#define DEV0_BKUP_REGISTER RTC_BKP_DR2
-struct MeterDeviceState
-{
-    uint32_t debounceTimeout;
-    uint32_t counter; // counter in liters (0.001 m^3)
-};
-
-struct MeterDevicePin
-{
-    GPIO_TypeDef *port;
-    uint16_t pin;
-    char *name;
-};
-
-struct MeterDeviceHighCounter
-{
-    uint16_t counter[NUM_METER_DEVICE];
-};
-
-volatile struct MeterDeviceState meterDevicesState[NUM_METER_DEVICE] = {};
-const struct MeterDevicePin meterDevicesPin[NUM_METER_DEVICE] = {
-{.port = HOT_WATER_1_GPIO_Port, .pin = HOT_WATER_1_Pin, .name=u8"ГВС 27"},
-{.port = COLD_WATER_1_GPIO_Port, .pin = COLD_WATER_1_Pin, .name=u8"ХВС 27"},
-{.port = HEAT_1_GPIO_Port, .pin = HEAT_1_Pin, .name=u8"Тепло 27"},
-{.port = HOT_WATER_2_GPIO_Port, .pin = HOT_WATER_2_Pin, .name=u8"ГВС 28"},
-{.port = COLD_WATER_2_GPIO_Port, .pin = COLD_WATER_2_Pin, .name=u8"ХВС 28"},
-{.port = HEAT_2_GPIO_Port, .pin = HEAT_2_Pin, .name=u8"Тепло 28"}
-};
-
-volatile const struct MeterDeviceHighCounter * const meterDevicesHighCounter = (struct MeterDeviceHighCounter *)(FLASH_BASE+127*FLASH_PAGE_SIZE);
-volatile const struct MeterDeviceHighCounter * const meterDevicesHighCounterBackup = (struct MeterDeviceHighCounter *)(FLASH_BASE+126*FLASH_PAGE_SIZE);
-
-typedef enum {
-    FLASH_Counter_Backup = 0,
-    FLASH_Counter_Main = 1
-} FLASH_Counter_Source;
-
-typedef HAL_StatusTypeDef (*CmdProccessor)(const char *cmd);
-struct UARTCommand {
-    const char *cmd;
-    CmdProccessor processor;
-};
-
-static HAL_StatusTypeDef CmdSetTime(const char *cmd);
-static HAL_StatusTypeDef CmdListMeters(const char *cmd);
-static HAL_StatusTypeDef CmdSetMeter(const char *cmd);
-static HAL_StatusTypeDef CmdSetEcho(const char *cmd);
-
-const struct UARTCommand uartCommands[] = {
-{ .cmd = "SET TIME ", .processor = &CmdSetTime },
-{ .cmd = "LIST", .processor = &CmdListMeters },
-{ .cmd = "SET METER ", .processor = &CmdSetMeter },
-{ .cmd = "ECHO ", .processor = &CmdSetEcho },
-{ .cmd = NULL, .processor = NULL }
-};
-
-const char ATError[] = "Error\r\n";
-const char ATOK[] = "OK\r\n";
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_RTC_Init(void);
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
-static void CheckHighCounterState();
-static void LoadMeterDevicesState(FLASH_Counter_Source source);
-static void ProcessMeterDevices();
-static int SelectNearestDevice();
-static void SendCounter(int dev);
-static void SaveCounter(int dev);
-static void WriteHighCounterToFlash(FLASH_Counter_Source source);
-static HAL_StatusTypeDef BackupHighCounter();
-static void ProcessUART();
-static CmdProccessor FindCommand(const char* cmd);
 
 /* USER CODE END PFP */
 
@@ -175,8 +107,7 @@ int main(void)
   MX_RTC_Init();
 
   /* USER CODE BEGIN 2 */
-  CheckHighCounterState();
-  LoadMeterDevicesState(FLASH_Counter_Main);
+  MeterDevicesLoadValues();
 
   /* USER CODE END 2 */
 
@@ -184,8 +115,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-      ProcessMeterDevices();
-      ProcessUART();
+      MeterDevicesProcess();
+      UARTCommandsProcess();
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
@@ -255,407 +186,13 @@ void SystemClock_Config(void)
   HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
 }
 
-/* RTC init function */
-static void MX_RTC_Init(void)
-{
-
-    /**Initialize RTC Only 
-    */
-  hrtc.Instance = RTC;
-  hrtc.Init.AsynchPrediv = RTC_AUTO_1_SECOND;
-  hrtc.Init.OutPut = RTC_OUTPUTSOURCE_ALARM;
-  if (HAL_RTC_Init(&hrtc) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-}
-
-/** Configure pins as 
-        * Analog 
-        * Input 
-        * Output
-        * EVENT_OUT
-        * EXTI
-        * Free pins are configured automatically as Analog (this feature is enabled through 
-        * the Code Generation settings)
-*/
-static void MX_GPIO_Init(void)
-{
-
-  GPIO_InitTypeDef GPIO_InitStruct;
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : LED0_Pin */
-  GPIO_InitStruct.Pin = LED0_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED0_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : HOT_WATER_1_Pin COLD_WATER_1_Pin HOT_WATER_2_Pin COLD_WATER_2_Pin 
-                           HEAT_1_Pin HEAT_2_Pin */
-  GPIO_InitStruct.Pin = HOT_WATER_1_Pin|COLD_WATER_1_Pin|HOT_WATER_2_Pin|COLD_WATER_2_Pin 
-                          |HEAT_1_Pin|HEAT_2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PA6 PA7 PA8 PA9 
-                           PA10 PA15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7|GPIO_PIN_8|GPIO_PIN_9 
-                          |GPIO_PIN_10|GPIO_PIN_15;
-  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PB0 PB1 PB2 PB10 
-                           PB11 PB12 PB13 PB14 
-                           PB15 PB4 PB5 PB6 
-                           PB7 PB8 PB9 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_10 
-                          |GPIO_PIN_11|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14 
-                          |GPIO_PIN_15|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6 
-                          |GPIO_PIN_7|GPIO_PIN_8|GPIO_PIN_9;
-  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI2_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI2_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
-
-}
-
 /* USER CODE BEGIN 4 */
-
-void CheckHighCounterState()
-{
-    // Check backup - it should be initialized
-    for(int i=0; i<NUM_METER_DEVICE; ++i) {
-        if(meterDevicesHighCounterBackup->counter[i] == 0xFFFF) {
-            // If any value is not initialized, save backup
-            BackupHighCounter();
-            break;
-        }
-    }
-
-    // Check main - it should be initialized
-    for(int i=0; i<NUM_METER_DEVICE; ++i) {
-        if(meterDevicesHighCounter->counter[i] == 0xFFFF) {
-            // If any value is not initialized, load from backup and save
-            LoadMeterDevicesState(FLASH_Counter_Backup);
-            WriteHighCounterToFlash(FLASH_Counter_Backup);
-        }
-    }
-
-}
-
-void LoadMeterDevicesState(FLASH_Counter_Source source)
-{
-    for(int i=0; i<NUM_METER_DEVICE; ++i) {
-        meterDevicesState[i].debounceTimeout = 0;
-        switch(source) {
-        case FLASH_Counter_Backup:
-            meterDevicesState[i].counter = ((uint32_t)(meterDevicesHighCounterBackup->counter[i]) << 16);
-            break;
-        case FLASH_Counter_Main:
-            meterDevicesState[i].counter = ((uint32_t)(meterDevicesHighCounter->counter[i]) << 16);
-            break;
-        }
-
-        if(meterDevicesState[i].counter == 0xFFFF0000) {
-            // if flash has not been initialized read 0
-            meterDevicesState[i].counter = 0;
-        }
-
-        meterDevicesState[i].counter |= HAL_RTCEx_BKUPRead(&hrtc, DEV0_BKUP_REGISTER+i);
-    }
-}
-
-void ProcessMeterDevices()
-{
-    int dev;
-    while((dev = SelectNearestDevice()) >= 0 ) {
-        while(HAL_GetTick() < meterDevicesState[dev].debounceTimeout) __NOP();
-        meterDevicesState[dev].debounceTimeout = 0;
-        if(HAL_GPIO_ReadPin(meterDevicesPin[dev].port, meterDevicesPin[dev].pin) == GPIO_PIN_RESET) {
-            meterDevicesState[dev].counter++;
-            if(meterDevicesState[dev].counter > 100000000) { // Counter overflow
-                meterDevicesState[dev].counter = 0;
-            }
-            SendCounter(dev);
-            SaveCounter(dev);
-            HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
-        }
-    }
-}
-
-int SelectNearestDevice()
-{
-    int selectedDevice = -1;
-    for(int i=0; i<NUM_METER_DEVICE; ++i) {
-        if(meterDevicesState[i].debounceTimeout == 0)
-            continue; // Skip not-interrupted device
-
-        if(selectedDevice < 0) {
-            selectedDevice = i;
-            continue;
-        }
-
-
-        if(meterDevicesState[i].debounceTimeout > UINT32_MAX/2 && meterDevicesState[selectedDevice].debounceTimeout < UINT32_MAX/2 ) {
-            // The counter is likely to overflow, use current as minimum value
-            selectedDevice = i;
-            continue;
-        }
-
-        if(meterDevicesState[i].debounceTimeout < meterDevicesState[selectedDevice].debounceTimeout) {
-            // The current device trigger earlier then selected device
-            selectedDevice = i;
-            continue;
-        }
-    }
-    return selectedDevice;
-}
-
-void SendCounter(int dev)
-{
-    char counterMsg[256];
-    time_t unixtime = 0;
-    HAL_RTC_GetUNIXTime(&hrtc, &unixtime);
-    struct tm calendarTime;
-    gmtime_r(&unixtime, &calendarTime);
-
-    uint32_t intCnt = meterDevicesState[dev].counter/1000;
-    uint16_t fracCnt =  meterDevicesState[dev].counter%1000;
-    sprintf(counterMsg,"%04d-%02d-%02dT%02d:%02d:%02d\t%d\t%s\t%05u.%03u\r\n",
-            calendarTime.tm_year+1900, calendarTime.tm_mon+1, calendarTime.tm_mday,
-            calendarTime.tm_hour, calendarTime.tm_min, calendarTime.tm_sec,
-            dev, meterDevicesPin[dev].name,
-            (uint)intCnt, (uint)fracCnt);
-    CDC_Transmit_FS((uint8_t*)counterMsg, strlen(counterMsg));
-}
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-    for(int i=0; i<NUM_METER_DEVICE; ++i) {
-        if(meterDevicesPin[i].pin == GPIO_Pin) {
-            if(meterDevicesState[i].debounceTimeout == 0) {
-                meterDevicesState[i].debounceTimeout = HAL_GetTick()+DEBOUNCER_TIMEOUT;
-            }
-            return;
-        }
-    }
+    MeterDeviceInterrupt(GPIO_Pin);
 }
 
-void SaveCounter(int dev)
-{
-    uint16_t cntHigh = (meterDevicesState[dev].counter & 0xFFFF0000)>>16;
-    uint16_t cntLow = (meterDevicesState[dev].counter & 0xFFFF);
-    if(meterDevicesHighCounter->counter[dev] != cntHigh) {
-        WriteHighCounterToFlash(FLASH_Counter_Main);
-    }
-    HAL_RTCEx_BKUPWrite(&hrtc, DEV0_BKUP_REGISTER+dev, cntLow);
-}
-
-void WriteHighCounterToFlash(FLASH_Counter_Source source)
-{
-    // Step 1:
-    if(source != FLASH_Counter_Backup) {
-        if(BackupHighCounter() != HAL_OK)
-            return;
-    }
-
-    if(HAL_FLASH_Unlock() != HAL_OK)
-        return;
-    // Step 2:
-    // Erase counter page (#127)
-    FLASH_EraseInitTypeDef flashErase;
-    flashErase.TypeErase = FLASH_TYPEERASE_PAGES;
-    flashErase.Banks = FLASH_BANK_1;
-    flashErase.PageAddress = FLASH_BASE+127*FLASH_PAGE_SIZE;
-    flashErase.NbPages = 1;
-    uint32_t pageError;
-    if(HAL_FLASHEx_Erase(&flashErase, &pageError) != HAL_OK) {
-        // Probably busy, try again later
-        // TODO: Notify error condition!
-        goto exit;
-    }
-
-    // Step 4:
-    // Write to counter page(#127)
-    for(int i=0; i<NUM_METER_DEVICE; ++i) {
-        uint16_t val = (meterDevicesState[i].counter & 0xFFFF0000)>>16;
-        if(HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, (uint32_t)(&meterDevicesHighCounter->counter[i]), val) != HAL_OK) {
-            // TODO: Notify error condition!
-            goto exit;
-        }
-    }
-
-    exit:
-    HAL_FLASH_Lock();
-}
-
-HAL_StatusTypeDef BackupHighCounter()
-{
-    HAL_StatusTypeDef status = HAL_FLASH_Unlock();
-    if(status != HAL_OK)
-        return status;
-    // Step 1:
-    // Erase backup page (#126)
-    FLASH_EraseInitTypeDef flashErase;
-    flashErase.TypeErase = FLASH_TYPEERASE_PAGES;
-    flashErase.Banks = FLASH_BANK_1;
-    flashErase.PageAddress = FLASH_BASE+126*FLASH_PAGE_SIZE;
-    flashErase.NbPages = 1;
-
-    uint32_t pageError;
-    status = HAL_FLASHEx_Erase(&flashErase, &pageError);
-    if(status != HAL_OK) {
-        // Probably busy, try again later
-        goto exit;
-    }
-
-    // Step 2:
-    // Copy counter page(#127) to backup page(#126)
-    for(int i=0; i<NUM_METER_DEVICE; ++i) {
-        status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, (uint32_t)(&meterDevicesHighCounterBackup->counter[i]), meterDevicesHighCounter->counter[i]);
-        if(status != HAL_OK) {
-            // TODO: Notify error condition!
-            goto exit;
-        }
-    }
-    exit:
-    HAL_FLASH_Lock();
-    return status;
-}
-
-void ProcessUART()
-{
-    const int size = 2*APP_RX_DATA_SIZE;
-    int head = USBRxCircBuf.head;
-    int tail = USBRxCircBuf.tail;
-    if(CIRC_CNT(head, tail, size)) {
-        for(int i=tail; i!=head; i=(i+1)&(size-1)) {
-            if(USBRxCircBuf.buf[i] == '\r') {
-                int cmdSize = CIRC_CNT(i, tail, size)+1;
-                int copyLeft = cmdSize-1;
-                char *cmd = malloc(cmdSize);
-                char *tmp = cmd;
-                while(copyLeft) {
-                    int copySize = CIRC_CNT_TO_END(i, tail, size);
-                    memcpy(tmp, USBRxCircBuf.buf+tail, copySize);
-                    tail = (tail+copySize)&(size-1);
-                    copyLeft -= copySize;
-                    tmp += copySize;
-                }
-                cmd[cmdSize-1] = 0;
-                CmdProccessor processor = FindCommand(cmd);
-                HAL_StatusTypeDef status = HAL_ERROR;
-                if(processor) {
-                    status = processor(cmd);
-                }
-                if(status == HAL_OK)  {
-                    CDC_Transmit_FS((uint8_t*)ATOK, sizeof(ATOK)-1);
-                }
-                else  {
-                    CDC_Transmit_FS((uint8_t*)ATError, sizeof(ATError)-1);
-                }
-                free(cmd);
-                tail = (tail+1)&(size-1);
-            }
-        }
-        USBRxCircBuf.tail = tail;
-    }
-}
-
-CmdProccessor FindCommand(const char *cmd)
-{
-    const struct UARTCommand *uartCmd;
-    for(uartCmd = uartCommands; uartCmd->cmd; ++uartCmd) {
-        if(strncmp(uartCmd->cmd, cmd, strlen(uartCmd->cmd)) == 0) {
-            break;
-        }
-    }
-    return uartCmd->processor;
-}
-
-HAL_StatusTypeDef CmdSetEcho(const char *cmd)
-{
-    if(strcmp(cmd, "ECHO ON") == 0) {
-        USBEchoState = ECHO_ON;
-        return HAL_OK;
-    }
-    else if(strcmp(cmd, "ECHO OFF") == 0) {
-        USBEchoState = ECHO_OFF;
-        return HAL_OK;
-    }
-    return HAL_ERROR;
-}
-
-HAL_StatusTypeDef CmdListMeters(const char *cmd)
-{
-    for(int dev = 0; dev < NUM_METER_DEVICE; ++dev) {
-        SendCounter(dev);
-    }
-    return HAL_OK;
-}
-
-HAL_StatusTypeDef CmdSetMeter(const char *cmd)
-{
-    uint dev, intVal;
-    char fracValStr[4] = {0,0,0,0};
-    int fields = sscanf(cmd, "SET METER %u %u.%3s", &dev, &intVal, fracValStr);
-    if(fields != 3)
-        return HAL_ERROR;
-    fracValStr[3] = 0;
-    for(int i=0; i<3; ++i) {
-        if(fracValStr[2-i] == 0) fracValStr[2-i] = '0';
-    }
-    int fracVal = atoi(fracValStr);
-    meterDevicesState[dev].counter = intVal*1000+fracVal;
-    SendCounter(dev);
-    SaveCounter(dev);
-    return HAL_OK;
-}
-
-HAL_StatusTypeDef CmdSetTime(const char *cmd)
-{
-    struct tm calendarTime;
-    int fields = sscanf(cmd, "SET TIME %u-%u-%uT%u:%u:%u"
-                        , &calendarTime.tm_year, &calendarTime.tm_mon, &calendarTime.tm_mday
-                        , &calendarTime.tm_hour, &calendarTime.tm_min, &calendarTime.tm_sec);
-    if(fields != 6)
-        return HAL_ERROR;
-    calendarTime.tm_mon--;
-    calendarTime.tm_year -= 1900;
-    calendarTime.tm_wday = -1;
-    calendarTime.tm_yday = -1;
-    calendarTime.tm_isdst = 0;
-    HAL_RTC_SetUNIXTime(&hrtc, mktime(&calendarTime));
-    return HAL_OK;
-}
 
 /* USER CODE END 4 */
 
