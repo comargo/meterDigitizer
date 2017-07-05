@@ -52,6 +52,8 @@
 
 /* USER CODE BEGIN Includes */
 #include <inttypes.h>
+#include <stdio.h>
+#include <ctype.h>
 #include "usbd_cdc_if.h"
 
 /* USER CODE END Includes */
@@ -74,6 +76,11 @@ struct MeterDevicePin
     char *name;
 };
 
+struct MeterDeviceHighCounter
+{
+    uint16_t counter[NUM_METER_DEVICE];
+};
+
 volatile struct MeterDeviceState meterDevicesState[NUM_METER_DEVICE] = {};
 const struct MeterDevicePin meterDevicesPin[NUM_METER_DEVICE] = {
 {.port = HOT_WATER_1_GPIO_Port, .pin = HOT_WATER_1_Pin, .name=u8"ГВС 27"},
@@ -84,6 +91,14 @@ const struct MeterDevicePin meterDevicesPin[NUM_METER_DEVICE] = {
 {.port = HEAT_2_GPIO_Port, .pin = HEAT_2_Pin, .name=u8"Тепло 28"}
 };
 
+volatile const struct MeterDeviceHighCounter * const meterDevicesHighCounter = (struct MeterDeviceHighCounter *)(FLASH_BASE+127*FLASH_PAGE_SIZE);
+volatile const struct MeterDeviceHighCounter * const meterDevicesHighCounterBackup = (struct MeterDeviceHighCounter *)(FLASH_BASE+126*FLASH_PAGE_SIZE);
+
+typedef enum {
+    FLASH_Counter_Backup = 0,
+    FLASH_Counter_Main = 1
+} FLASH_Counter_Source;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -93,9 +108,14 @@ static void MX_RTC_Init(void);
 
 /* USER CODE BEGIN PFP */
 /* Private function prototypes -----------------------------------------------*/
+static void CheckHighCounterState();
+static void LoadMeterDevicesState(FLASH_Counter_Source source);
 static void ProcessMeterDevices();
 static int SelectNearestDevice();
 static void SendCounter(int dev);
+static void SaveCounter(int dev);
+static void WriteHighCounterToFlash(FLASH_Counter_Source source);
+static HAL_StatusTypeDef BackupHighCounter();
 
 /* USER CODE END PFP */
 
@@ -132,6 +152,8 @@ int main(void)
   MX_RTC_Init();
 
   /* USER CODE BEGIN 2 */
+  CheckHighCounterState();
+  LoadMeterDevicesState(FLASH_Counter_Main);
 
   /* USER CODE END 2 */
 
@@ -303,6 +325,51 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+void
+CheckHighCounterState()
+{
+    // Check backup - it should be initialized
+    for(int i=0; i<NUM_METER_DEVICE; ++i) {
+        if(meterDevicesHighCounterBackup->counter[i] == 0xFFFF) {
+            // If any value is not initialized, save backup
+            BackupHighCounter();
+            break;
+        }
+    }
+
+    // Check main - it should be initialized
+    for(int i=0; i<NUM_METER_DEVICE; ++i) {
+        if(meterDevicesHighCounter->counter[i] == 0xFFFF) {
+            // If any value is not initialized, load from backup and save
+            LoadMeterDevicesState(FLASH_Counter_Backup);
+            WriteHighCounterToFlash(FLASH_Counter_Backup);
+        }
+    }
+
+}
+
+void LoadMeterDevicesState(FLASH_Counter_Source source)
+{
+    for(int i=0; i<NUM_METER_DEVICE; ++i) {
+        meterDevicesState[i].debounceTimeout = 0;
+        switch(source) {
+        case FLASH_Counter_Backup:
+            meterDevicesState[i].counter = ((uint32_t)(meterDevicesHighCounterBackup->counter[i]) << 16);
+            break;
+        case FLASH_Counter_Main:
+            meterDevicesState[i].counter = ((uint32_t)(meterDevicesHighCounter->counter[i]) << 16);
+            break;
+        }
+
+        if(meterDevicesState[i].counter == 0xFFFF0000) {
+            // if flash has not been initialized read 0
+            meterDevicesState[i].counter = 0;
+        }
+
+        meterDevicesState[i].counter |= HAL_RTCEx_BKUPRead(&hrtc, i+1);
+    }
+}
+
 void ProcessMeterDevices()
 {
     int dev;
@@ -315,6 +382,7 @@ void ProcessMeterDevices()
                 meterDevicesState[dev].counter = 0;
             }
             SendCounter(dev);
+            SaveCounter(dev);
             HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
         }
     }
@@ -375,6 +443,88 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
             return;
         }
     }
+}
+
+void SaveCounter(int dev)
+{
+    uint16_t cntHigh = (meterDevicesState[dev].counter & 0xFFFF0000)>>16;
+    uint16_t cntLow = (meterDevicesState[dev].counter & 0xFFFF);
+    if(meterDevicesHighCounter->counter[dev] != cntHigh) {
+        WriteHighCounterToFlash(FLASH_Counter_Main);
+    }
+    HAL_RTCEx_BKUPWrite(&hrtc, dev+1, cntLow);
+}
+
+void WriteHighCounterToFlash(FLASH_Counter_Source source)
+{
+    // Step 1:
+    if(source != FLASH_Counter_Backup) {
+        if(BackupHighCounter() != HAL_OK)
+            return;
+    }
+
+    if(HAL_FLASH_Unlock() != HAL_OK)
+        return;
+    // Step 2:
+    // Erase counter page (#127)
+    FLASH_EraseInitTypeDef flashErase;
+    flashErase.TypeErase = FLASH_TYPEERASE_PAGES;
+    flashErase.Banks = FLASH_BANK_1;
+    flashErase.PageAddress = FLASH_BASE+127*FLASH_PAGE_SIZE;
+    flashErase.NbPages = 1;
+    uint32_t pageError;
+    if(HAL_FLASHEx_Erase(&flashErase, &pageError) != HAL_OK) {
+        // Probably busy, try again later
+        // TODO: Notify error condition!
+        goto exit;
+    }
+
+    // Step 4:
+    // Write to counter page(#127)
+    for(int i=0; i<NUM_METER_DEVICE; ++i) {
+        uint16_t val = (meterDevicesState[i].counter & 0xFFFF0000)>>16;
+        if(HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, (uint32_t)(&meterDevicesHighCounter->counter[i]), val) != HAL_OK) {
+            // TODO: Notify error condition!
+            goto exit;
+        }
+    }
+
+    exit:
+    HAL_FLASH_Lock();
+}
+
+HAL_StatusTypeDef BackupHighCounter()
+{
+    HAL_StatusTypeDef status = HAL_FLASH_Unlock();
+    if(status != HAL_OK)
+        return status;
+    // Step 1:
+    // Erase backup page (#126)
+    FLASH_EraseInitTypeDef flashErase;
+    flashErase.TypeErase = FLASH_TYPEERASE_PAGES;
+    flashErase.Banks = FLASH_BANK_1;
+    flashErase.PageAddress = FLASH_BASE+126*FLASH_PAGE_SIZE;
+    flashErase.NbPages = 1;
+
+    uint32_t pageError;
+    status = HAL_FLASHEx_Erase(&flashErase, &pageError);
+    if(status != HAL_OK) {
+        // Probably busy, try again later
+        goto exit;
+    }
+
+    // Step 2:
+    // Copy counter page(#127) to backup page(#126)
+    for(int i=0; i<NUM_METER_DEVICE; ++i) {
+        status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, (uint32_t)(&meterDevicesHighCounterBackup->counter[i]), meterDevicesHighCounter->counter[i]);
+        if(status != HAL_OK) {
+            // TODO: Notify error condition!
+            goto exit;
+        }
+    }
+    exit:
+    HAL_FLASH_Lock();
+    return status;
 }
 
 /* USER CODE END 4 */
