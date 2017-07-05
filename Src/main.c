@@ -349,8 +349,7 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void
-CheckHighCounterState()
+void CheckHighCounterState()
 {
     // Check backup - it should be initialized
     for(int i=0; i<NUM_METER_DEVICE; ++i) {
