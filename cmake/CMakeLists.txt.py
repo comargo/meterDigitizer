@@ -12,6 +12,7 @@ target_compile_definitions($${PROJECT_NAME} PUBLIC ${C_DEFS})
 target_include_directories($${PROJECT_NAME} PUBLIC ${C_INCLUDES})
 target_compile_options($${PROJECT_NAME} PUBLIC ${MCU} -Wall -fdata-sections -ffunction-sections -std=c11)
 target_link_libraries($${PROJECT_NAME} -L$${CMAKE_CURRENT_SOURCE_DIR} ${LDFLAGS} -Wl,--no-wchar-size-warning)
+include(CMakeLists.local.txt OPTIONAL)
 '''
 
 #special cases:
