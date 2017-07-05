@@ -1,0 +1,3 @@
+target_sources(meterDigitizer
+	PRIVATE Src/hal_rtc_unix.c
+)
