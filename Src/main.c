@@ -60,6 +60,7 @@ RTC_HandleTypeDef hrtc;
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
+#define DEV0_BKUP_REGISTER RTC_BKP_DR2
 struct MeterDeviceState
 {
     uint32_t debounceTimeout;
@@ -96,6 +97,28 @@ typedef enum {
     FLASH_Counter_Main = 1
 } FLASH_Counter_Source;
 
+typedef HAL_StatusTypeDef (*CmdProccessor)(const char *cmd);
+struct UARTCommand {
+    const char *cmd;
+    CmdProccessor processor;
+};
+
+static HAL_StatusTypeDef CmdSetTime(const char *cmd);
+static HAL_StatusTypeDef CmdListMeters(const char *cmd);
+static HAL_StatusTypeDef CmdSetMeter(const char *cmd);
+static HAL_StatusTypeDef CmdSetEcho(const char *cmd);
+
+const struct UARTCommand uartCommands[] = {
+{ .cmd = "SET TIME ", .processor = &CmdSetTime },
+{ .cmd = "LIST", .processor = &CmdListMeters },
+{ .cmd = "SET METER ", .processor = &CmdSetMeter },
+{ .cmd = "ECHO ", .processor = &CmdSetEcho },
+{ .cmd = NULL, .processor = NULL }
+};
+
+const char ATError[] = "Error\r\n";
+const char ATOK[] = "OK\r\n";
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -113,6 +136,8 @@ static void SendCounter(int dev);
 static void SaveCounter(int dev);
 static void WriteHighCounterToFlash(FLASH_Counter_Source source);
 static HAL_StatusTypeDef BackupHighCounter();
+static void ProcessUART();
+static CmdProccessor FindCommand(const char* cmd);
 
 /* USER CODE END PFP */
 
@@ -159,6 +184,7 @@ int main(void)
   while (1)
   {
       ProcessMeterDevices();
+      ProcessUART();
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
@@ -363,7 +389,7 @@ void LoadMeterDevicesState(FLASH_Counter_Source source)
             meterDevicesState[i].counter = 0;
         }
 
-        meterDevicesState[i].counter |= HAL_RTCEx_BKUPRead(&hrtc, i+1);
+        meterDevicesState[i].counter |= HAL_RTCEx_BKUPRead(&hrtc, DEV0_BKUP_REGISTER+i);
     }
 }
 
@@ -449,7 +475,7 @@ void SaveCounter(int dev)
     if(meterDevicesHighCounter->counter[dev] != cntHigh) {
         WriteHighCounterToFlash(FLASH_Counter_Main);
     }
-    HAL_RTCEx_BKUPWrite(&hrtc, dev+1, cntLow);
+    HAL_RTCEx_BKUPWrite(&hrtc, DEV0_BKUP_REGISTER+dev, cntLow);
 }
 
 void WriteHighCounterToFlash(FLASH_Counter_Source source)
@@ -522,6 +548,119 @@ HAL_StatusTypeDef BackupHighCounter()
     exit:
     HAL_FLASH_Lock();
     return status;
+}
+
+void ProcessUART()
+{
+    const int size = 2*APP_RX_DATA_SIZE;
+    int head = USBRxCircBuf.head;
+    int tail = USBRxCircBuf.tail;
+    if(CIRC_CNT(head, tail, size)) {
+        for(int i=tail; i!=head; i=(i+1)&(size-1)) {
+            if(USBRxCircBuf.buf[i] == '\r') {
+                int cmdSize = CIRC_CNT(i, tail, size)+1;
+                int copyLeft = cmdSize-1;
+                char *cmd = malloc(cmdSize);
+                char *tmp = cmd;
+                while(copyLeft) {
+                    int copySize = CIRC_CNT_TO_END(i, tail, size);
+                    memcpy(tmp, USBRxCircBuf.buf+tail, copySize);
+                    tail = (tail+copySize)&(size-1);
+                    copyLeft -= copySize;
+                    tmp += copySize;
+                }
+                cmd[cmdSize-1] = 0;
+                CmdProccessor processor = FindCommand(cmd);
+                HAL_StatusTypeDef status = HAL_ERROR;
+                if(processor) {
+                    status = processor(cmd);
+                }
+                if(status == HAL_OK)  {
+                    CDC_Transmit_FS((uint8_t*)ATOK, sizeof(ATOK)-1);
+                }
+                else  {
+                    CDC_Transmit_FS((uint8_t*)ATError, sizeof(ATError)-1);
+                }
+                free(cmd);
+                tail = (tail+1)&(size-1);
+            }
+        }
+        USBRxCircBuf.tail = tail;
+    }
+}
+
+CmdProccessor FindCommand(const char *cmd)
+{
+    const struct UARTCommand *uartCmd;
+    for(uartCmd = uartCommands; uartCmd->cmd; ++uartCmd) {
+        if(strncmp(uartCmd->cmd, cmd, strlen(uartCmd->cmd)) == 0) {
+            break;
+        }
+    }
+    return uartCmd->processor;
+}
+
+HAL_StatusTypeDef CmdSetEcho(const char *cmd)
+{
+    if(strcmp(cmd, "ECHO ON") == 0) {
+        USBEchoState = ECHO_ON;
+        return HAL_OK;
+    }
+    else if(strcmp(cmd, "ECHO OFF") == 0) {
+        USBEchoState = ECHO_OFF;
+        return HAL_OK;
+    }
+    return HAL_ERROR;
+}
+
+HAL_StatusTypeDef CmdListMeters(const char *cmd)
+{
+    for(int dev = 0; dev < NUM_METER_DEVICE; ++dev) {
+        SendCounter(dev);
+    }
+    return HAL_OK;
+}
+
+HAL_StatusTypeDef CmdSetMeter(const char *cmd)
+{
+    uint dev, intVal;
+    char fracValStr[4] = {0,0,0,0};
+    int fields = sscanf(cmd, "SET METER %u %u.%3s", &dev, &intVal, fracValStr);
+    if(fields != 3)
+        return HAL_ERROR;
+    fracValStr[3] = 0;
+    for(int i=0; i<3; ++i) {
+        if(fracValStr[2-i] == 0) fracValStr[2-i] = '0';
+    }
+    int fracVal = atoi(fracValStr);
+    meterDevicesState[dev].counter = intVal*1000+fracVal;
+    SendCounter(dev);
+    SaveCounter(dev);
+    return HAL_OK;
+}
+
+HAL_StatusTypeDef CmdSetTime(const char *cmd)
+{
+    uint year, month, day, hour, min, sec;
+    int fields = sscanf(cmd, "SET TIME 20%u-%u-%uT%u:%u:%u"
+                        , &year, &month, &day
+                        , &hour, &min, &sec);
+    if(fields != 6)
+        return HAL_ERROR;
+    RTC_DateTypeDef date = {
+        .Year = year,
+        .Month = month,
+        .Date = day,
+        .WeekDay = 0
+    };
+    RTC_TimeTypeDef time = {
+        .Hours = hour,
+        .Minutes = min,
+        .Seconds = sec
+    };
+    HAL_RTC_SetTime(&hrtc, &time, RTC_FORMAT_BIN);
+    HAL_RTC_SetDate(&hrtc, &date, RTC_FORMAT_BIN);
+    return HAL_OK;
 }
 
 /* USER CODE END 4 */

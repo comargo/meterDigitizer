@@ -49,6 +49,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_cdc_if.h"
 /* USER CODE BEGIN INCLUDE */
+#include <ctype.h>
+#include <stdio.h>
 /* USER CODE END INCLUDE */
 
 /** @addtogroup STM32_USB_OTG_DEVICE_LIBRARY
@@ -75,7 +77,6 @@
 /* USER CODE BEGIN PRIVATE_DEFINES */
 /* Define size for the receive and transmit buffer over CDC */
 /* It's up to user to redefine and/or remove those define */
-#define APP_RX_DATA_SIZE  4
 #define APP_TX_DATA_SIZE  4
 /* USER CODE END PRIVATE_DEFINES */
 /**
@@ -104,6 +105,7 @@ uint8_t UserRxBufferFS[APP_RX_DATA_SIZE];
 uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
+char USBRxCircBufFIFO[2*APP_RX_DATA_SIZE];
 /* USER CODE END PRIVATE_VARIABLES */
 
 /**
@@ -115,6 +117,8 @@ uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
   */ 
   extern USBD_HandleTypeDef hUsbDeviceFS;
 /* USER CODE BEGIN EXPORTED_VARIABLES */
+USBD_EchoState USBEchoState;
+volatile struct circ_buf USBRxCircBuf;
 /* USER CODE END EXPORTED_VARIABLES */
 
 /**
@@ -155,6 +159,12 @@ static int8_t CDC_Init_FS(void)
 { 
   /* USER CODE BEGIN 3 */ 
   /* Set Application Buffers */
+    USBRxCircBuf.buf = USBRxCircBufFIFO;
+    USBRxCircBuf.head = 0;
+    USBRxCircBuf.tail = 0;
+
+    USBEchoState = ECHO_OFF;
+
   USBD_CDC_SetTxBuffer(&hUsbDeviceFS, UserTxBufferFS, 0);
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, UserRxBufferFS);
   return (USBD_OK);
@@ -237,7 +247,7 @@ static int8_t CDC_Control_FS  (uint8_t cmd, uint8_t* pbuf, uint16_t length)
     break;
 
   case CDC_SEND_BREAK:
- 
+    NVIC_SystemReset();
     break;    
     
   default:
@@ -266,8 +276,30 @@ static int8_t CDC_Control_FS  (uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_FS (uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 6 */
-  USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
+  if(USBEchoState == ECHO_ON) {
+    CDC_Transmit_FS(Buf, *Len);
+  }
+  const int size = 2*APP_RX_DATA_SIZE;
+  while(*Len) {
+      int head = USBRxCircBuf.head;
+      int tail = USBRxCircBuf.tail;
+      int copyLen = CIRC_SPACE_TO_END(head, tail, size);
+      if(!copyLen) {
+          // Buffer overflow
+          break;
+      }
+      if(*Len < copyLen) {
+          copyLen = *Len;
+      }
+      *Len -= copyLen;
+      memcpy(USBRxCircBuf.buf+head, Buf, copyLen);
+      Buf += copyLen;
+      USBRxCircBuf.head = (head+copyLen)&(size-1);
+  }
+
+  USBD_CDC_SetRxBuffer(&hUsbDeviceFS, UserRxBufferFS);
   USBD_CDC_ReceivePacket(&hUsbDeviceFS);
+
   return (USBD_OK);
   /* USER CODE END 6 */ 
 }
@@ -298,6 +330,13 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+HAL_StatusTypeDef CDC_WaitForTransmit()
+{
+    USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+    while (hcdc->TxState != 0) __NOP();
+    return HAL_OK;
+}
+
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /**

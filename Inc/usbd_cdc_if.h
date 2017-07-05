@@ -56,6 +56,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_cdc.h"
 /* USER CODE BEGIN INCLUDE */
+#include "circ_buf.h"
 /* USER CODE END INCLUDE */
 
 /** @addtogroup STM32_USB_OTG_DEVICE_LIBRARY
@@ -71,6 +72,7 @@
   * @{
   */ 
 /* USER CODE BEGIN EXPORTED_DEFINES */
+#define APP_RX_DATA_SIZE  512
 /* USER CODE END EXPORTED_DEFINES */
 
 /**
@@ -81,6 +83,11 @@
   * @{
   */  
 /* USER CODE BEGIN EXPORTED_TYPES */
+ typedef enum {
+     ECHO_OFF = 0,
+     ECHO_ON
+ } USBD_EchoState;
+
 /* USER CODE END EXPORTED_TYPES */
 
 /**
@@ -103,6 +110,8 @@
 extern USBD_CDC_ItfTypeDef  USBD_Interface_fops_FS;
 
 /* USER CODE BEGIN EXPORTED_VARIABLES */
+extern volatile struct circ_buf USBRxCircBuf;
+extern USBD_EchoState USBEchoState;
 /* USER CODE END EXPORTED_VARIABLES */
 
 /**
@@ -115,6 +124,7 @@ extern USBD_CDC_ItfTypeDef  USBD_Interface_fops_FS;
 uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len);
 
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
+HAL_StatusTypeDef CDC_WaitForTransmit();
 /* USER CODE END EXPORTED_FUNCTIONS */
 /**
   * @}
