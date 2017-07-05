@@ -52,6 +52,7 @@
 
 /* USER CODE BEGIN Includes */
 #include "usbd_cdc_if.h"
+#include "hal_rtc_unix.h"
 
 /* USER CODE END Includes */
 
@@ -442,15 +443,16 @@ int SelectNearestDevice()
 void SendCounter(int dev)
 {
     char counterMsg[256];
-    RTC_DateTypeDef date;
-    RTC_TimeTypeDef time;
-    HAL_RTC_GetDate(&hrtc, &date, RTC_FORMAT_BIN);
-    HAL_RTC_GetTime(&hrtc, &time, RTC_FORMAT_BIN);
+    time_t unixtime = 0;
+    HAL_RTC_GetUNIXTime(&hrtc, &unixtime);
+    struct tm calendarTime;
+    gmtime_r(&unixtime, &calendarTime);
+
     uint32_t intCnt = meterDevicesState[dev].counter/1000;
     uint16_t fracCnt =  meterDevicesState[dev].counter%1000;
-    sprintf(counterMsg,"20%02u-%02u-%02uT%02u:%02u:%02u\t%d\t%s\t%05u.%03u\r\n",
-            (uint)date.Year, (uint)date.Month, (uint)date.Date,
-            (uint)time.Hours, (uint)time.Minutes, (uint)time.Seconds,
+    sprintf(counterMsg,"%04d-%02d-%02dT%02d:%02d:%02d\t%d\t%s\t%05u.%03u\r\n",
+            calendarTime.tm_year+1900, calendarTime.tm_mon+1, calendarTime.tm_mday,
+            calendarTime.tm_hour, calendarTime.tm_min, calendarTime.tm_sec,
             dev, meterDevicesPin[dev].name,
             (uint)intCnt, (uint)fracCnt);
     CDC_Transmit_FS((uint8_t*)counterMsg, strlen(counterMsg));
@@ -641,25 +643,18 @@ HAL_StatusTypeDef CmdSetMeter(const char *cmd)
 
 HAL_StatusTypeDef CmdSetTime(const char *cmd)
 {
-    uint year, month, day, hour, min, sec;
-    int fields = sscanf(cmd, "SET TIME 20%u-%u-%uT%u:%u:%u"
-                        , &year, &month, &day
-                        , &hour, &min, &sec);
+    struct tm calendarTime;
+    int fields = sscanf(cmd, "SET TIME %u-%u-%uT%u:%u:%u"
+                        , &calendarTime.tm_year, &calendarTime.tm_mon, &calendarTime.tm_mday
+                        , &calendarTime.tm_hour, &calendarTime.tm_min, &calendarTime.tm_sec);
     if(fields != 6)
         return HAL_ERROR;
-    RTC_DateTypeDef date = {
-        .Year = year,
-        .Month = month,
-        .Date = day,
-        .WeekDay = 0
-    };
-    RTC_TimeTypeDef time = {
-        .Hours = hour,
-        .Minutes = min,
-        .Seconds = sec
-    };
-    HAL_RTC_SetTime(&hrtc, &time, RTC_FORMAT_BIN);
-    HAL_RTC_SetDate(&hrtc, &date, RTC_FORMAT_BIN);
+    calendarTime.tm_mon--;
+    calendarTime.tm_year -= 1900;
+    calendarTime.tm_wday = -1;
+    calendarTime.tm_yday = -1;
+    calendarTime.tm_isdst = 0;
+    HAL_RTC_SetUNIXTime(&hrtc, mktime(&calendarTime));
     return HAL_OK;
 }
 
